@@ -80,6 +80,9 @@ type Runner interface {
 
 	// Remove is a convenience method that runs a command to remove a file
 	Remove(assets.CopyableFile) error
+
+	// ReadableFile open a remote file for reading
+	ReadableFile(sourcePath string) (assets.ReadableFile, error)
 }
 
 // Command returns a human readable command string that does not induce eye fatigue
@@ -135,7 +138,7 @@ func teePrefix(prefix string, r io.Reader, w io.Writer, logger func(format strin
 	if line.Len() > 0 {
 		logger("%s%s", prefix, line.String())
 	}
-	return nil
+	return scanner.Err()
 }
 
 // fileExists checks that the same file exists on the other end
@@ -206,5 +209,10 @@ func writeFile(dst string, f assets.CopyableFile, perms os.FileMode) error {
 	if n != int64(f.GetLength()) {
 		return fmt.Errorf("%s: expected to write %d bytes, but wrote %d instead", dst, f.GetLength(), n)
 	}
+
+	if err := w.Chmod(perms); err != nil {
+		return errors.Wrap(err, "chmod")
+	}
+
 	return w.Close()
 }

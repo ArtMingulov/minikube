@@ -19,6 +19,7 @@ package driver
 import (
 	"os/exec"
 	"runtime"
+	"strings"
 )
 
 // supportedDrivers is a list of supported drivers on Darwin.
@@ -26,17 +27,32 @@ var supportedDrivers = func() []string {
 	if runtime.GOARCH == "arm64" {
 		// on darwin/arm64 only docker and ssh are supported yet
 		return []string{
+			QEMU2,
+			VFKit,
+			Parallels,
 			Docker,
 			Podman,
+			SSH,
+		}
+	}
+	// PowerPC does not support podman
+	if strings.HasPrefix(runtime.GOARCH, "ppc") {
+		return []string{
+			VirtualBox,
+			Parallels,
+			HyperKit,
+			VMware,
+			Docker,
 			SSH,
 		}
 	}
 	return []string{
 		VirtualBox,
 		Parallels,
-		VMwareFusion,
 		HyperKit,
 		VMware,
+		QEMU2,
+		VFKit,
 		Docker,
 		Podman,
 		SSH,

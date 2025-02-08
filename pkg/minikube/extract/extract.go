@@ -48,6 +48,11 @@ var exclude = []string{
 	"    - {{.profile}}",
 	"test/integration",
 	"pkg/minikube/reason/exitcodes.go",
+	"{{.err}}",
+	"{{.extra_option_component_name}}.{{.key}}={{.value}}",
+	"{{ .name }}: {{ .rejection }}",
+	"127.0.0.1",
+	"- {{.logPath}}",
 }
 
 // ErrMapFile is a constant to refer to the err_map file, which contains the Advice strings.
@@ -129,7 +134,7 @@ func TranslatableStrings(paths []string, functions []string, output string) erro
 		f := e.fs.Pop().(funcType)
 		e.currentFunc = f
 		for _, root := range paths {
-			err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			err := filepath.Walk(root, func(path string, _ os.FileInfo, _ error) error {
 				if shouldCheckFile(path) {
 					e.filename = path
 					return inspectFile(e)
@@ -263,7 +268,6 @@ func checkArguments(s *ast.CallExpr, e *state) {
 			if s := checkIdentForStringValue(i); s != "" {
 				e.translations[s] = ""
 				matched = true
-				break
 			}
 		}
 
@@ -272,12 +276,11 @@ func checkArguments(s *ast.CallExpr, e *state) {
 			if s := checkString(argString.Value); s != "" {
 				e.translations[s] = ""
 				matched = true
-				break
 			}
 		}
 	}
 
-	// No string arguments were found, check everything the calls this function for strings
+	// No string arguments were found, check everything that calls this function for strings
 	if !matched {
 		addParentFuncToList(e)
 	}
@@ -350,6 +353,12 @@ func checkString(s string) string {
 		if e == stringToTranslate {
 			return ""
 		}
+	}
+
+	// Remove unnecessary backslashes
+	if s[0] == '"' {
+		r := strings.NewReplacer(`\\`, "\\", `\a`, "\a", `\b`, "\b", `\f`, "\f", `\n`, "\n", `\r`, "\r", `\t`, "\t", `\v`, "\v", `\"`, "\"")
+		stringToTranslate = r.Replace(stringToTranslate)
 	}
 
 	// Hooray, we can translate the string!
@@ -490,6 +499,7 @@ func writeStringsToFiles(e *state, output string) error {
 		if err != nil {
 			return errors.Wrap(err, "marshalling translations")
 		}
+		c = append(c, '\n')
 		err = os.WriteFile(path, c, info.Mode())
 		if err != nil {
 			return errors.Wrap(err, "writing translation file")
@@ -542,7 +552,28 @@ func extractAdvice(f ast.Node, e *state) error {
 
 		if i.Name == "Advice" {
 			// At this point we know the value in the kvp is guaranteed to be a string
-			advice, _ := kvp.Value.(*ast.BasicLit)
+			advice, ok := kvp.Value.(*ast.BasicLit)
+			if !ok {
+				// Maybe the advice is a function call, like fmt.Sprintf
+				ad, ok := kvp.Value.(*ast.CallExpr)
+				if !ok {
+					// Ok, we tried. Abort.
+					return true
+				}
+				// Let's support fmt.Sprintf with a string argument only
+				for _, arg := range ad.Args {
+					adArg, ok := arg.(*ast.BasicLit)
+					if !ok {
+						continue
+					}
+					s := checkString(adArg.Value)
+					if s != "" {
+						e.translations[s] = ""
+					}
+				}
+				return true
+
+			}
 			s := checkString(advice.Value)
 			if s != "" {
 				e.translations[s] = ""

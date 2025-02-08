@@ -24,7 +24,9 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -35,21 +37,74 @@ import (
 // MemorySource is the source name used for in-memory copies
 const MemorySource = "memory"
 
-// CopyableFile is something that can be copied
-type CopyableFile interface {
+// ReadableFile is something that can be read
+type ReadableFile interface {
 	io.Reader
-	io.Writer
 	GetLength() int
-	SetLength(int)
 	GetSourcePath() string
-	GetTargetPath() string
 
-	GetTargetDir() string
-	GetTargetName() string
 	GetPermissions() string
 	GetModTime() (time.Time, error)
 	Seek(int64, int) (int64, error)
 	Close() error
+}
+
+// CopyableFile is something that can be copied
+type CopyableFile interface {
+	ReadableFile
+
+	io.Writer
+	SetLength(int)
+	GetTargetPath() string
+	GetTargetDir() string
+	GetTargetName() string
+}
+
+type writeFn func(d []byte) (n int, err error)
+
+// BaseCopyableFile is something that can be copied and written
+type BaseCopyableFile struct {
+	ReadableFile
+
+	writer     writeFn
+	length     int
+	targetDir  string
+	targetName string
+}
+
+// Write is for write something into the file
+func (r *BaseCopyableFile) Write(d []byte) (n int, err error) {
+	return r.writer(d)
+}
+
+// SetLength is for setting the length
+func (r *BaseCopyableFile) SetLength(length int) {
+	r.length = length
+}
+
+// GetTargetPath returns target path
+func (r *BaseCopyableFile) GetTargetPath() string {
+	return filepath.Join(r.GetTargetDir(), r.GetTargetName())
+}
+
+// GetTargetDir returns target dir
+func (r *BaseCopyableFile) GetTargetDir() string {
+	return r.targetDir
+}
+
+// GetTargetName returns target name
+func (r *BaseCopyableFile) GetTargetName() string {
+	return r.targetName
+}
+
+// NewBaseCopyableFile creates a new instance of BaseCopyableFile
+func NewBaseCopyableFile(source ReadableFile, writer writeFn, targetDir, targetName string) *BaseCopyableFile {
+	return &BaseCopyableFile{
+		ReadableFile: source,
+		writer:       writer,
+		targetDir:    targetDir,
+		targetName:   targetName,
+	}
 }
 
 // BaseAsset is the base asset class
@@ -213,8 +268,8 @@ func (m *MemoryAsset) GetLength() int {
 }
 
 // SetLength returns length
-func (m *MemoryAsset) SetLength(len int) {
-	m.length = len
+func (m *MemoryAsset) SetLength(length int) {
+	m.length = length
 }
 
 // Read reads the asset
@@ -304,12 +359,14 @@ func (m *BinAsset) loadData() error {
 		return err
 	}
 
-	tpl, err := template.New(m.SourcePath).Funcs(template.FuncMap{"default": defaultValue}).Parse(string(contents))
-	if err != nil {
-		return err
-	}
+	if strings.HasSuffix(m.BaseAsset.SourcePath, ".tmpl") {
+		tpl, err := template.New(m.SourcePath).Funcs(template.FuncMap{"default": defaultValue}).Parse(string(contents))
+		if err != nil {
+			return err
+		}
 
-	m.template = tpl
+		m.template = tpl
+	}
 
 	m.length = len(contents)
 	m.reader = bytes.NewReader(contents)
@@ -346,8 +403,8 @@ func (m *BinAsset) GetLength() int {
 }
 
 // SetLength sets length
-func (m *BinAsset) SetLength(len int) {
-	m.length = len
+func (m *BinAsset) SetLength(length int) {
+	m.length = length
 }
 
 // Read reads the asset

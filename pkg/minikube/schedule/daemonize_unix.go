@@ -1,5 +1,4 @@
 //go:build !windows
-// +build !windows
 
 /*
 Copyright 2020 The Kubernetes Authors All rights reserved.
@@ -38,7 +37,7 @@ import (
 func KillExisting(profiles []string) {
 	for _, profile := range profiles {
 		if err := killPIDForProfile(profile); err != nil {
-			klog.Errorf("error killng PID for profile %s: %v", profile, err)
+			klog.Warningf("error killng PID for profile %s: %v", profile, err)
 		}
 		_, cc := mustload.Partial(profile)
 		cc.ScheduledStop = nil
@@ -77,7 +76,7 @@ func killPIDForProfile(profile string) error {
 	return nil
 }
 
-func daemonize(profiles []string, duration time.Duration) error {
+func daemonize(profiles []string, _ time.Duration) error {
 	_, _, err := godaemon.MakeDaemon(&godaemon.DaemonAttr{})
 	if err != nil {
 		return err

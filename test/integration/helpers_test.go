@@ -263,10 +263,12 @@ func PostMortemLogs(t *testing.T, profile string, multinode ...bool) {
 			t.Logf("%s: %v", rr.Command(), rerr)
 			return
 		}
-		notRunning := strings.Split(rr.Stdout.String(), " ")
-		if len(notRunning) == 0 {
+		// strings.Split("", " ") results in [""] slice of len 1 !
+		out := strings.TrimSpace(rr.Stdout.String())
+		if len(out) == 0 {
 			continue
 		}
+		notRunning := strings.Split(out, " ")
 		t.Logf("non-running pods: %s", strings.Join(notRunning, " "))
 
 		t.Logf("======> post-mortem[%s]: describe non-running pods <======", t.Name())
@@ -321,7 +323,7 @@ func PodWait(ctx context.Context, t *testing.T, profile string, ns string, selec
 
 	start := time.Now()
 	t.Logf("(dbg) %s: waiting %s for pods matching %q in namespace %q ...", t.Name(), timeout, selector, ns)
-	f := func() (bool, error) {
+	f := func(ctx context.Context) (bool, error) {
 		pods, err := client.CoreV1().Pods(ns).List(ctx, listOpts)
 		if err != nil {
 			t.Logf("%s: WARNING: pod list for %q %q returned: %v", t.Name(), ns, selector, err)
@@ -366,7 +368,7 @@ func PodWait(ctx context.Context, t *testing.T, profile string, ns string, selec
 		return false, nil
 	}
 
-	err = wait.PollImmediate(1*time.Second, timeout, f)
+	err = wait.PollUntilContextTimeout(ctx, 1*time.Second, timeout, true, f)
 	names := []string{}
 	for n := range foundNames {
 		names = append(names, n)
@@ -388,7 +390,7 @@ func PVCWait(ctx context.Context, t *testing.T, profile string, ns string, name 
 
 	t.Logf("(dbg) %s: waiting %s for pvc %q in namespace %q ...", t.Name(), timeout, name, ns)
 
-	f := func() (bool, error) {
+	f := func(ctx context.Context) (bool, error) {
 		ret, err := Run(t, exec.CommandContext(ctx, "kubectl", "--context", profile, "get", "pvc", name, "-o", "jsonpath={.status.phase}", "-n", ns))
 		if err != nil {
 			t.Logf("%s: WARNING: PVC get for %q %q returned: %v", t.Name(), ns, name, err)
@@ -404,7 +406,7 @@ func PVCWait(ctx context.Context, t *testing.T, profile string, ns string, name 
 		return false, nil
 	}
 
-	return wait.PollImmediate(1*time.Second, timeout, f)
+	return wait.PollUntilContextTimeout(ctx, 1*time.Second, timeout, true, f)
 }
 
 // VolumeSnapshotWait waits for volume snapshot to be ready to use
@@ -413,7 +415,7 @@ func VolumeSnapshotWait(ctx context.Context, t *testing.T, profile string, ns st
 
 	t.Logf("(dbg) %s: waiting %s for volume snapshot %q in namespace %q ...", t.Name(), timeout, name, ns)
 
-	f := func() (bool, error) {
+	f := func(ctx context.Context) (bool, error) {
 		res, err := Run(t, exec.CommandContext(ctx, "kubectl", "--context", profile, "get", "volumesnapshot", name, "-o", "jsonpath={.status.readyToUse}", "-n", ns))
 		if err != nil {
 			t.Logf("%s: WARNING: volume snapshot get for %q %q returned: %v", t.Name(), ns, name, err)
@@ -429,7 +431,7 @@ func VolumeSnapshotWait(ctx context.Context, t *testing.T, profile string, ns st
 		return isReady, nil
 	}
 
-	return wait.PollImmediate(1*time.Second, timeout, f)
+	return wait.PollUntilContextTimeout(ctx, 1*time.Second, timeout, true, f)
 }
 
 // Status returns a minikube component status as a string
@@ -519,18 +521,38 @@ func cpTestLocalPath() string {
 	return filepath.Join(*testdataDir, "cp-test.txt")
 }
 
-// testCpCmd ensures copy functionality into minikube instance.
-func testCpCmd(ctx context.Context, t *testing.T, profile string, node string) {
-	srcPath := cpTestLocalPath()
-	dstPath := cpTestMinikubePath()
-
-	cpArgv := []string{"-p", profile, "cp", srcPath}
+func cpTestReadText(ctx context.Context, t *testing.T, profile, node, path string) string {
 	if node == "" {
-		cpArgv = append(cpArgv, dstPath)
-	} else {
-		cpArgv = append(cpArgv, fmt.Sprintf("%s:%s", node, dstPath))
+		expected, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("failed to read test file 'testdata/cp-test.txt' : %v", err)
+		}
+		return string(expected)
 	}
 
+	sshArgv := []string{"-p", profile, "ssh", "-n", node, fmt.Sprintf("sudo cat %s", path)}
+	rr, err := Run(t, exec.CommandContext(ctx, Target(), sshArgv...))
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Errorf("failed to run command by deadline. exceeded timeout : %s", rr.Command())
+	}
+	if err != nil {
+		t.Errorf("failed to run an cp command. args %q : %v", rr.Command(), err)
+	}
+
+	return rr.Stdout.String()
+}
+
+func cpTestMergePath(node, path string) string {
+	if node == "" {
+		return path
+	}
+
+	return fmt.Sprintf("%s:%s", node, path)
+}
+
+// testCpCmd ensures copy functionality into minikube instance.
+func testCpCmd(ctx context.Context, t *testing.T, profile string, srcNode, srcPath, dstNode, dstPath string) {
+	cpArgv := []string{"-p", profile, "cp", cpTestMergePath(srcNode, srcPath), cpTestMergePath(dstNode, dstPath)}
 	rr, err := Run(t, exec.CommandContext(ctx, Target(), cpArgv...))
 	if ctx.Err() == context.DeadlineExceeded {
 		t.Errorf("failed to run command by deadline. exceeded timeout : %s", rr.Command())
@@ -539,26 +561,15 @@ func testCpCmd(ctx context.Context, t *testing.T, profile string, node string) {
 		t.Errorf("failed to run an cp command. args %q : %v", rr.Command(), err)
 	}
 
-	sshArgv := []string{"-p", profile, "ssh"}
-	if node != "" {
-		sshArgv = append(sshArgv, "-n", node)
-	}
-	sshArgv = append(sshArgv, fmt.Sprintf("sudo cat %s", dstPath))
-
-	rr, err = Run(t, exec.CommandContext(ctx, Target(), sshArgv...))
-	if ctx.Err() == context.DeadlineExceeded {
-		t.Errorf("failed to run command by deadline. exceeded timeout : %s", rr.Command())
-	}
-	if err != nil {
-		t.Errorf("failed to run an cp command. args %q : %v", rr.Command(), err)
+	expected := cpTestReadText(ctx, t, profile, srcNode, srcPath)
+	var copiedText string
+	if srcNode == "" && dstNode == "" {
+		copiedText = cpTestReadText(ctx, t, profile, profile, dstPath)
+	} else {
+		copiedText = cpTestReadText(ctx, t, profile, dstNode, dstPath)
 	}
 
-	expected, err := os.ReadFile(srcPath)
-	if err != nil {
-		t.Errorf("failed to read test file 'testdata/cp-test.txt' : %v", err)
-	}
-
-	if diff := cmp.Diff(string(expected), rr.Stdout.String()); diff != "" {
+	if diff := cmp.Diff(expected, copiedText); diff != "" {
 		t.Errorf("/testdata/cp-test.txt content mismatch (-want +got):\n%s", diff)
 	}
 }

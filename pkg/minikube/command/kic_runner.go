@@ -131,12 +131,16 @@ func (k *kicRunner) RunCmd(cmd *exec.Cmd) (*RunResult, error) {
 
 }
 
-func (k *kicRunner) StartCmd(cmd *exec.Cmd) (*StartedCmd, error) {
+func (k *kicRunner) StartCmd(_ *exec.Cmd) (*StartedCmd, error) {
 	return nil, fmt.Errorf("kicRunner does not support StartCmd - you could be the first to add it")
 }
 
-func (k *kicRunner) WaitCmd(sc *StartedCmd) (*RunResult, error) {
+func (k *kicRunner) WaitCmd(_ *StartedCmd) (*RunResult, error) {
 	return nil, fmt.Errorf("kicRunner does not support WaitCmd - you could be the first to add it")
+}
+
+func (k *kicRunner) ReadableFile(_ string) (assets.ReadableFile, error) {
+	return nil, fmt.Errorf("kicRunner does not support ReadableFile - you could be the first to add it")
 }
 
 // Copy copies a file and its permissions
@@ -195,6 +199,7 @@ func (k *kicRunner) Copy(f assets.CopyableFile) error {
 	if err != nil {
 		return errors.Wrap(err, "creating temporary file")
 	}
+	defer tf.Close()
 	defer os.Remove(tf.Name())
 
 	if err := writeFile(tf.Name(), f, os.FileMode(perms)); err != nil {
